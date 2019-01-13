@@ -13,6 +13,7 @@
 // GLOBAL SHADER VARIABLES
 //----------------------------------------------------------------------------------
 
+// Coordinate Spaces
 CBUFFER_START(UnityPerDraw)
     float4x4 unity_ObjectToWorld;
     float4 unity_LightIndicesOffsetAndCount;
@@ -23,6 +24,10 @@ CBUFFER_START(UnityPerFrame)
     float4x4 unity_MatrixVP;
 CBUFFER_END
 
+#define UNITY_MATRIX_M unity_ObjectToWorld
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/UnityInstancing.hlsl"
+
+// Lights
 #define MAX_VISIBLE_LIGHTS 16
 
 CBUFFER_START(_LightBuffer)
@@ -32,8 +37,13 @@ CBUFFER_START(_LightBuffer)
     float4 _VisibleLightSpotDirections[MAX_VISIBLE_LIGHTS];
 CBUFFER_END
 
-#define UNITY_MATRIX_M unity_ObjectToWorld
-#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/UnityInstancing.hlsl"
+// Shadows
+CBUFFER_START(_ShadowBuffer)
+    float4x4 unity_WorldToShadow;
+CBUFFER_END
+
+TEXTURE2D_SHADOW(_ShadowMap);
+SAMPLER_CMP(sampler_ShadowMap);
 
 //----------------------------------------------------------------------------------
 // SPACE TRANSFORMATIONS
@@ -106,6 +116,18 @@ float3 ApplyDiffuseLowPriLights (float3 normalWS, float3 posWS) {
         diffuse += DiffuseLight(lightIndex, normalWS, posWS);
     }
     return diffuse;
+}
+
+//----------------------------------------------------------------------------------
+// returns a value between 0-1 
+// depending on whether or not posWS is obscured by another object
+// from the light's perspective
+// 0 = object is obscured (in shadow)
+float ShadowAttenuation (float3 posWS) {
+    float4 shadowPos = mul(unity_WorldToShadow, float4(posWS, 1.0));
+    // convert from light's projected coordinates to regular coordinates
+    shadowPos.xyz /= shadowPos.w;
+    return SAMPLE_TEXTURE2D_SHADOW(_ShadowMap, sampler_ShadowMap, shadowPos.xyz);
 }
 
 #endif //LRP_CORE

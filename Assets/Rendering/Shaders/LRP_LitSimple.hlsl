@@ -35,6 +35,7 @@ LitVertexOut LitPassVertex (LitVertexIn IN) {
     output.posWS = ObjectToWorld(IN.pos);
     output.normalWS = normalize(mul((float3x3)UNITY_MATRIX_M, IN.normal));
 
+    // apply (low pri) diffuse lighting
     output.vertexLight = ApplyDiffuseLowPriLights(output.normalWS, output.posWS.xyz);
 
     return output;
@@ -42,8 +43,14 @@ LitVertexOut LitPassVertex (LitVertexIn IN) {
 
 //----------------------------------------------------------------------------------
 float4 LitPassFragment (LitVertexOut IN) : SV_TARGET {
+    // apply (high pri) diffuse lighting
     float3 diffuseLight = IN.vertexLight;
     diffuseLight += ApplyDiffuseHighPriLights(IN.normalWS, IN.posWS.xyz);
+
+    // apply shadows
+    diffuseLight *= ShadowAttenuation(IN.posWS.xyz);
+
+    // apply color
     float3 color = _Color.rgb * diffuseLight;
 
     return float4(color, 1.0);
