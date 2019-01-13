@@ -39,8 +39,9 @@ public class LindenPipeline : RenderPipeline {
     // 'vectors' as in directions or positions
     // based on whether they're directional or point
 
-    const int maxVisibleLights = 4;
-
+    const int maxVisibleLights = 16;
+    
+    static int lightIndicesOffsetAndCountID = Shader.PropertyToID("unity_LightIndicesOffsetAndCount");
     static int visibleLightColorsId = Shader.PropertyToID("_VisibleLightColors");
     static int visibleLightVectorsId = Shader.PropertyToID("_VisibleLightVectors");
     static int visibleLightAttenuationsId = Shader.PropertyToID("_VisibleLightAttenuations");
@@ -94,7 +95,13 @@ public class LindenPipeline : RenderPipeline {
         );
 
         // prepare light data
-        ConfigureLights();
+        if(cullResults.visibleLights.Count > 0) {
+            ConfigureLights();
+        } else {
+            cameraBuffer.SetGlobalVector (
+                lightIndicesOffsetAndCountID, Vector4.zero
+            );
+        }
 
         cameraBuffer.BeginSample("Camera");
 
@@ -119,9 +126,11 @@ public class LindenPipeline : RenderPipeline {
         var drawSettings = new DrawRendererSettings(
             camera, new ShaderPassName("SRPDefaultUnlit")
         ) {
-            flags = drawFlags,
-            rendererConfiguration = RendererConfiguration.PerObjectLightIndices8
+            flags = drawFlags
         };
+        if(cullResults.visibleLights.Count > 0) {
+            drawSettings.rendererConfiguration = RendererConfiguration.PerObjectLightIndices8;
+        }
         drawSettings.sorting.flags = SortFlags.CommonOpaque;
 
         var filterSettings = new FilterRenderersSettings(true) {
@@ -202,6 +211,17 @@ public class LindenPipeline : RenderPipeline {
                 }
             }
             visibleLightAttenuations[i] = a; 
+        }
+
+        // let unity know about unused lights so it doesn't write
+        //   to out of bounds locations in light data
+        if(cullResults.visibleLights.Count > maxVisibleLights) {
+            // allocates new memory every frame, booo
+            int[] lightIndices = cullResults.GetLightIndexMap();
+            for(int i = maxVisibleLights; i < cullResults.visibleLights.Count; i++) {
+                lightIndices[i] = -1;
+            } 
+            cullResults.SetLightIndexMap(lightIndices);
         }
     }
 

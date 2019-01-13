@@ -23,7 +23,7 @@ CBUFFER_START(UnityPerFrame)
     float4x4 unity_MatrixVP;
 CBUFFER_END
 
-#define MAX_VISIBLE_LIGHTS 4
+#define MAX_VISIBLE_LIGHTS 16
 
 CBUFFER_START(_LightBuffer)
     float4 _VisibleLightColors[MAX_VISIBLE_LIGHTS];
@@ -86,15 +86,24 @@ float3 DiffuseLight (int i, float3 normalWS, float3 posWS) {
 }
 
 //----------------------------------------------------------------------------------
-float3 ApplyDiffuseLights (float3 normalWS, float3 posWS) {
+// applies (up to 4) highest pri lights
+float3 ApplyDiffuseHighPriLights (float3 normalWS, float3 posWS) {
     float3 diffuse = float3(0,0,0);
-
-    // only apply number of lights actually affecting this obj
-    for(int i = 0; i < unity_LightIndicesOffsetAndCount.y; i++) {
+    // only apply number of lights actually affecting this obj, up to 4
+    for(int i = 0; i < min(unity_LightIndicesOffsetAndCount.y, 4); i++) {
         int lightIndex = unity_4LightIndices0[i];
         diffuse += DiffuseLight(lightIndex, normalWS, posWS);
     }
+    return diffuse;
+}
 
+// applies (up to 4) lowest pri lights
+float3 ApplyDiffuseLowPriLights (float3 normalWS, float3 posWS) {
+    float3 diffuse = float3(0, 0, 0);
+    for(int i = 4; i < min(unity_LightIndicesOffsetAndCount.y, 8); i++) {
+        int lightIndex = unity_4LightIndices1[i - 4];
+        diffuse += DiffuseLight(lightIndex, normalWS, posWS);
+    }
     return diffuse;
 }
 

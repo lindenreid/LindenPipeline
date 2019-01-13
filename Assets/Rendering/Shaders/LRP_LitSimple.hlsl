@@ -19,8 +19,9 @@ struct LitVertexIn {
 //----------------------------------------------------------------------------------
 struct LitVertexOut {
     float4 posCS : SV_POSITION;
-    float4 posWS : TEXCOORD0;
     float3 normalWS : NORMAL;
+    float4 posWS : TEXCOORD0;
+    float3 vertexLight : TEXCOORD1;
 };
 
 //----------------------------------------------------------------------------------
@@ -34,12 +35,15 @@ LitVertexOut LitPassVertex (LitVertexIn IN) {
     output.posWS = ObjectToWorld(IN.pos);
     output.normalWS = normalize(mul((float3x3)UNITY_MATRIX_M, IN.normal));
 
+    output.vertexLight = ApplyDiffuseLowPriLights(output.normalWS, output.posWS);
+
     return output;
 }
 
 //----------------------------------------------------------------------------------
 float4 LitPassFragment (LitVertexOut IN) : SV_TARGET {
-    float3 diffuseLight = ApplyDiffuseLights(IN.normalWS, IN.posWS.xyz);
+    float3 diffuseLight = IN.vertexLight;
+    diffuseLight += ApplyDiffuseHighPriLights(IN.normalWS, IN.posWS.xyz);
     float3 color = _Color.rgb * diffuseLight;
 
     return float4(color, 1.0);
