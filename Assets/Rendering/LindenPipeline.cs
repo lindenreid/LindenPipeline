@@ -29,9 +29,11 @@ public class LindenPipeline : RenderPipeline {
     CullResults cullResults;
 
     //------------------------------------------------------------------------------
-    // BUFFERS
+    // BUFFERS & RENDER TEXTURES
     //------------------------------------------------------------------------------
     CommandBuffer cameraBuffer = new CommandBuffer { name = "Camera" };
+    CommandBuffer shadowBuffer = new CommandBuffer { name = "Shadow Map" };
+    RenderTexture shadowMap;
 
     //------------------------------------------------------------------------------
     // LIGHTING SETTINGS
@@ -40,6 +42,10 @@ public class LindenPipeline : RenderPipeline {
     // based on whether they're directional or point
 
     const int maxVisibleLights = 16;
+    
+    static int shadowCastingLightIndex = 1;
+    static int shadowMapID = Shader.PropertyToID("_ShadowMap");
+    static int worldToShadowMatrixId = Shader.PropertyToID("unity_WorldToShadow");
     
     static int lightIndicesOffsetAndCountID = Shader.PropertyToID("unity_LightIndicesOffsetAndCount");
     static int visibleLightColorsId = Shader.PropertyToID("_VisibleLightColors");
@@ -83,7 +89,10 @@ public class LindenPipeline : RenderPipeline {
         }
         CullResults.Cull(ref cullingParameters, context, ref cullResults);
 
-        // pass builtin global vars to GPU
+        // render shadow map
+        RenderShadows(context);
+
+        // pass builtin global camera vars to GPU
         context.SetupCameraProperties(camera);
 
         // clear buffer
@@ -160,6 +169,12 @@ public class LindenPipeline : RenderPipeline {
         cameraBuffer.Clear();
 
         context.Submit();
+
+        // release shadow map mem
+        if(shadowMap) {
+            RenderTexture.ReleaseTemporary(shadowMap);
+            shadowMap = null;
+        }
     }
 
     //------------------------------------------------------------------------------
@@ -223,6 +238,66 @@ public class LindenPipeline : RenderPipeline {
             } 
             cullResults.SetLightIndexMap(lightIndices);
         }
+    }
+
+    //------------------------------------------------------------------------------
+    private void RenderShadows(ScriptableRenderContext context) {
+        shadowMap = RenderTexture.GetTemporary(
+            512, 512, 16, RenderTextureFormat.Shadowmap
+        );
+        shadowMap.filterMode = FilterMode.Bilinear;
+        shadowMap.wrapMode = TextureWrapMode.Clamp;
+
+        CoreUtils.SetRenderTarget(
+            shadowBuffer, shadowMap,
+            RenderBufferLoadAction.DontCare, RenderBufferStoreAction.Store,
+            ClearFlag.Depth
+        );
+        shadowBuffer.BeginSample("Shadow Map");
+        context.ExecuteCommandBuffer(shadowBuffer);
+        shadowBuffer.Clear();
+
+        // configure view & proj matrices from POV of light that's casting shadows
+        Matrix4x4 viewMatrix, projectionMatrix;
+        ShadowSplitData splitData;
+        cullResults.ComputeSpotShadowMatricesAndCullingPrimitives (
+            shadowCastingLightIndex,
+            out viewMatrix, out projectionMatrix, out splitData
+        );
+        
+        shadowBuffer.SetViewProjectionMatrices(viewMatrix, projectionMatrix);
+        context.ExecuteCommandBuffer(shadowBuffer);
+        shadowBuffer.Clear();
+
+        // draw all shadow-casting objects
+        var shadowSettings = new DrawShadowsSettings(
+            cullResults,
+            shadowCastingLightIndex
+        );
+        context.DrawShadows(ref shadowSettings);
+
+        // setup shadow projection matrix
+        // account for z-direction setting
+        if (SystemInfo.usesReversedZBuffer) {
+            projectionMatrix.m20 = -projectionMatrix.m20;
+            projectionMatrix.m21 = -projectionMatrix.m21;
+            projectionMatrix.m22 = -projectionMatrix.m22;
+            projectionMatrix.m23 = -projectionMatrix.m23;
+        }
+        // clip space is (-1, 1), but depth coordinates are (0, 1)
+        // so bake the conversion into our matrix
+        var scaleOffset = Matrix4x4.identity;
+        scaleOffset.m00 = scaleOffset.m11 = scaleOffset.m22 = 0.5f;
+        scaleOffset.m03 = scaleOffset.m13 = scaleOffset.m23 = 0.5f;
+
+        // make shadow map available as global shader property
+        Matrix4x4 worldtoShadowMatrix = scaleOffset * (projectionMatrix * viewMatrix);
+        shadowBuffer.SetGlobalMatrix(worldToShadowMatrixId, worldtoShadowMatrix);
+        shadowBuffer.SetGlobalTexture(shadowMapID, shadowMap);
+
+        shadowBuffer.EndSample("Shadow Map");
+        context.ExecuteCommandBuffer(shadowBuffer);
+        shadowBuffer.Clear();
     }
 
     //------------------------------------------------------------------------------

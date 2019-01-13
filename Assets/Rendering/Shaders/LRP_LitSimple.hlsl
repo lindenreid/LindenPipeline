@@ -35,7 +35,7 @@ LitVertexOut LitPassVertex (LitVertexIn IN) {
     output.posWS = ObjectToWorld(IN.pos);
     output.normalWS = normalize(mul((float3x3)UNITY_MATRIX_M, IN.normal));
 
-    output.vertexLight = ApplyDiffuseLowPriLights(output.normalWS, output.posWS);
+    output.vertexLight = ApplyDiffuseLowPriLights(output.normalWS, output.posWS.xyz);
 
     return output;
 }

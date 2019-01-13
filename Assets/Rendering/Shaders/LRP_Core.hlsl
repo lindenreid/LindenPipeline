@@ -86,7 +86,7 @@ float3 DiffuseLight (int i, float3 normalWS, float3 posWS) {
 }
 
 //----------------------------------------------------------------------------------
-// applies (up to 4) highest pri lights
+// applies (up to 4) highest priority lights
 float3 ApplyDiffuseHighPriLights (float3 normalWS, float3 posWS) {
     float3 diffuse = float3(0,0,0);
     // only apply number of lights actually affecting this obj, up to 4
@@ -97,7 +97,8 @@ float3 ApplyDiffuseHighPriLights (float3 normalWS, float3 posWS) {
     return diffuse;
 }
 
-// applies (up to 4) lowest pri lights
+//----------------------------------------------------------------------------------
+// applies (up to 4) lowest priority lights
 float3 ApplyDiffuseLowPriLights (float3 normalWS, float3 posWS) {
     float3 diffuse = float3(0, 0, 0);
     for(int i = 4; i < min(unity_LightIndicesOffsetAndCount.y, 8); i++) {
