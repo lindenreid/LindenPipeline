@@ -7,13 +7,27 @@ using Conditional = System.Diagnostics.ConditionalAttribute;
 [CreateAssetMenu(menuName = "Rendering/Linden Pipeline")]
 public class LindenPipelineAsset : RenderPipelineAsset {
 
+    public enum ShadowMapSize {
+        _256 = 256,
+        _512 = 512,
+        _1024 = 1024,
+        _2048 = 2048,
+        _4096 = 4096
+    }
+
     [SerializeField]
     private bool dynamicBatching;
     [SerializeField]
     private bool instancing;
+    [SerializeField]
+    private ShadowMapSize shadowMapSize = ShadowMapSize._1024;
 
     protected override IRenderPipeline InternalCreatePipeline () {
-        return new LindenPipeline(dynamicBatching, instancing);
+        return new LindenPipeline(
+            dynamicBatching,
+            instancing,
+            (int)shadowMapSize
+        );
     }
 
 }
@@ -43,31 +57,47 @@ public class LindenPipeline : RenderPipeline {
 
     const int maxVisibleLights = 16;
     
-    static int shadowCastingLightIndex = 1;
-    static int shadowMapID = Shader.PropertyToID("_ShadowMap");
-    static int worldToShadowMatrixId = Shader.PropertyToID("unity_WorldToShadow");
-    
-    static int lightIndicesOffsetAndCountID = Shader.PropertyToID("unity_LightIndicesOffsetAndCount");
-    static int visibleLightColorsId = Shader.PropertyToID("_VisibleLightColors");
-    static int visibleLightVectorsId = Shader.PropertyToID("_VisibleLightVectors");
-    static int visibleLightAttenuationsId = Shader.PropertyToID("_VisibleLightAttenuations");
-    static int visibleLightSpotDirectionsId = Shader.PropertyToID("_VisibleLightSpotDirections");
+    static int lightIndicesOffsetAndCountID =   Shader.PropertyToID("unity_LightIndicesOffsetAndCount");
+    static int visibleLightColorsId =           Shader.PropertyToID("_VisibleLightColors");
+    static int visibleLightVectorsId =          Shader.PropertyToID("_VisibleLightVectors");
+    static int visibleLightAttenuationsId =     Shader.PropertyToID("_VisibleLightAttenuations");
+    static int visibleLightSpotDirectionsId =   Shader.PropertyToID("_VisibleLightSpotDirections");
 
-    Vector4[] visibleLightColors = new Vector4[maxVisibleLights];
-    Vector4[] visibleLightVectors = new Vector4[maxVisibleLights];
-    Vector4[] visibleLightAttenuations = new Vector4[maxVisibleLights];
-    Vector4[] visibleLightSpotDirections = new Vector4[maxVisibleLights];
+    Vector4[] visibleLightColors =          new Vector4[maxVisibleLights];
+    Vector4[] visibleLightVectors =         new Vector4[maxVisibleLights];
+    Vector4[] visibleLightAttenuations =    new Vector4[maxVisibleLights];
+    Vector4[] visibleLightSpotDirections =  new Vector4[maxVisibleLights];
+
+    //------------------------------------------------------------------------------
+    // SHADOW SETTINGS
+    //------------------------------------------------------------------------------
+    static int shadowCastingLightIndex = 1;
+    int shadowMapSize;
+    Vector4[] shadowData = new Vector4[maxVisibleLights];
+
+    static int shadowMapID =            Shader.PropertyToID("_ShadowMap");
+    static int worldToShadowMatrixId =  Shader.PropertyToID("unity_WorldToShadow");
+    static int shadowBiasId =           Shader.PropertyToID("_ShadowBias");
+    static int shadowStrengthId =       Shader.PropertyToID("_ShadowStrength");
+    static int shadowMapSizeId =        Shader.PropertyToID("_ShadowMapSize");
+
+    const string shadowsSoftKeyword = "_SHADOWS_SOFT";
 
     //------------------------------------------------------------------------------
     // PUBILC FUNCTIONS
     //------------------------------------------------------------------------------
-    public LindenPipeline (bool dynamicBatching, bool instancing) {
+    public LindenPipeline (
+        bool dynamicBatching,
+        bool instancing,
+        int shadowMapSize
+    ) {
         if(dynamicBatching) {
             drawFlags = DrawRendererFlags.EnableDynamicBatching;
         }
         if(instancing) {
             drawFlags |= DrawRendererFlags.EnableInstancing;
         }
+        this.shadowMapSize = shadowMapSize;
     }
 
     //------------------------------------------------------------------------------
@@ -89,8 +119,16 @@ public class LindenPipeline : RenderPipeline {
         }
         CullResults.Cull(ref cullingParameters, context, ref cullResults);
 
-        // render shadow map
-        RenderShadows(context);
+        // prepare light & shadow data
+        if(cullResults.visibleLights.Count > 0) {
+            ConfigureLights();
+            RenderShadows(context);
+        } else {
+            cameraBuffer.SetGlobalVector (
+                lightIndicesOffsetAndCountID, Vector4.zero
+            );
+        }
+        ConfigureLights();
 
         // pass builtin global camera vars to GPU
         context.SetupCameraProperties(camera);
@@ -102,15 +140,6 @@ public class LindenPipeline : RenderPipeline {
             (clearFlags & CameraClearFlags.Color) != 0,
             camera.backgroundColor
         );
-
-        // prepare light data
-        if(cullResults.visibleLights.Count > 0) {
-            ConfigureLights();
-        } else {
-            cameraBuffer.SetGlobalVector (
-                lightIndicesOffsetAndCountID, Vector4.zero
-            );
-        }
 
         cameraBuffer.BeginSample("Camera");
 
@@ -189,6 +218,7 @@ public class LindenPipeline : RenderPipeline {
             // set light color
             VisibleLight light = cullResults.visibleLights[i];
             visibleLightColors[i] = light.finalColor;
+            Vector4 shadow = Vector4.zero;
 
             // set light vector, attentuation, & spotdirection
             //   based on light type
@@ -226,6 +256,7 @@ public class LindenPipeline : RenderPipeline {
                 }
             }
             visibleLightAttenuations[i] = a; 
+            shadowData[i] = shadow;
         }
 
         // let unity know about unused lights so it doesn't write
@@ -243,7 +274,9 @@ public class LindenPipeline : RenderPipeline {
     //------------------------------------------------------------------------------
     private void RenderShadows(ScriptableRenderContext context) {
         shadowMap = RenderTexture.GetTemporary(
-            512, 512, 16, RenderTextureFormat.Shadowmap
+            shadowMapSize, shadowMapSize,
+            16,
+            RenderTextureFormat.Shadowmap
         );
         shadowMap.filterMode = FilterMode.Bilinear;
         shadowMap.wrapMode = TextureWrapMode.Clamp;
@@ -266,6 +299,13 @@ public class LindenPipeline : RenderPipeline {
         );
         
         shadowBuffer.SetViewProjectionMatrices(viewMatrix, projectionMatrix);
+
+        // also configure light shadow settings
+        shadowBuffer.SetGlobalFloat (
+            shadowBiasId,
+            cullResults.visibleLights[shadowCastingLightIndex].light.shadowBias
+        );
+
         context.ExecuteCommandBuffer(shadowBuffer);
         shadowBuffer.Clear();
 
@@ -294,6 +334,26 @@ public class LindenPipeline : RenderPipeline {
         Matrix4x4 worldtoShadowMatrix = scaleOffset * (projectionMatrix * viewMatrix);
         shadowBuffer.SetGlobalMatrix(worldToShadowMatrixId, worldtoShadowMatrix);
         shadowBuffer.SetGlobalTexture(shadowMapID, shadowMap);
+
+        // set other shader properties
+        shadowBuffer.SetGlobalFloat (
+            shadowStrengthId,
+            cullResults.visibleLights[shadowCastingLightIndex].light.shadowStrength
+        );
+
+        float invShadowMapSize = 1.0f / shadowMapSize;
+        shadowBuffer.SetGlobalVector (
+            shadowMapSizeId, new Vector4(
+                invShadowMapSize, invShadowMapSize, shadowMapSize, shadowMapSize
+            )
+        );
+
+        if (cullResults.visibleLights[shadowCastingLightIndex].light.shadows == LightShadows.Soft) {
+			shadowBuffer.EnableShaderKeyword(shadowsSoftKeyword);
+		}
+		else {
+			shadowBuffer.DisableShaderKeyword(shadowsSoftKeyword);
+		}
 
         shadowBuffer.EndSample("Shadow Map");
         context.ExecuteCommandBuffer(shadowBuffer);

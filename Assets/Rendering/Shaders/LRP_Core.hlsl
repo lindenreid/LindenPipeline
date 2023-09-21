@@ -8,6 +8,7 @@
 // OS : object space
 
 #include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Common.hlsl"
+#include "Packages/com.unity.render-pipelines.core/ShaderLibrary/Shadow/ShadowSamplingTent.hlsl"
 
 //----------------------------------------------------------------------------------
 // GLOBAL SHADER VARIABLES
@@ -40,6 +41,12 @@ CBUFFER_END
 // Shadows
 CBUFFER_START(_ShadowBuffer)
     float4x4 unity_WorldToShadow;
+    float _ShadowStrength;
+    float4 _ShadowMapSize;
+CBUFFER_END
+
+CBUFFER_START(_ShadowCasterBuffer)
+    float _ShadowBias;
 CBUFFER_END
 
 TEXTURE2D_SHADOW(_ShadowMap);
@@ -124,10 +131,33 @@ float3 ApplyDiffuseLowPriLights (float3 normalWS, float3 posWS) {
 // from the light's perspective
 // 0 = object is obscured (in shadow)
 float ShadowAttenuation (float3 posWS) {
-    float4 shadowPos = mul(unity_WorldToShadow, float4(posWS, 1.0));
     // convert from light's projected coordinates to regular coordinates
+    float4 shadowPos = mul(unity_WorldToShadow, float4(posWS, 1.0));
     shadowPos.xyz /= shadowPos.w;
-    return SAMPLE_TEXTURE2D_SHADOW(_ShadowMap, sampler_ShadowMap, shadowPos.xyz);
+
+    // get attenuation
+    float attn = SAMPLE_TEXTURE2D_SHADOW(_ShadowMap, sampler_ShadowMap, shadowPos.xyz);
+
+    // get soft attenuation if soft shadows defined
+    // samples the shadow map multiple times, does magik
+#if defined(_SHADOWS_SOFT)
+    real tentWeights[9];
+    real2 tentUVs[9];
+    SampleShadow_ComputeSamples_Tent_5x5 (
+        _ShadowMapSize, shadowPos.xy, tentWeights, tentUVs
+    );
+    attn = 0;
+    for (int i = 0; i < 9; i++) {
+        attn += tentWeights[i] * SAMPLE_TEXTURE2D_SHADOW (
+            _ShadowMap, sampler_ShadowMap, float3(tentUVs[i].xy, shadowPos.z)
+        );
+    }
+#endif
+
+    // apply shadow strength
+    attn = lerp(1.0, attn, _ShadowStrength);
+
+    return attn;
 }
 
 #endif //LRP_CORE

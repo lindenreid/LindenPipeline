@@ -21,8 +21,10 @@ ShadowVertexOut ShadowPassVertex (ShadowVertexIn IN) {
     // clamp vertices to near plane so that they don't intersect the near plane
     // account for reversed z-value for OpenGL
 #if UNITY_REVERSED_Z
+    output.posCS.z -= _ShadowBias;
     output.posCS.z = min(output.posCS.z, output.posCS.w * UNITY_NEAR_CLIP_VALUE);
 #else 
+    output.posCS.z += _ShadowBias;
     output.posCS.z = max(output.posCS.z, output.posCS.w * UNITY_NEAR_CLIP_VALUE);
 #endif
 
